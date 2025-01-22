@@ -7,7 +7,7 @@ static FILE *inputfile;
 static FILE *outputfile;
 
 void binaryToHex(unsigned char bytes[], int byte_size, char *hex);
-void encrypt_block(unsigned char key[], unsigned char block[], char *outputblock);
+void encrypt_block(unsigned char key[], unsigned char block[], int blockSize);
 
 int main(int argc, char const *argv[])
 {
@@ -46,10 +46,9 @@ int main(int argc, char const *argv[])
     //         block[counter++] = c;
     //     }
     //     // encrypt/decrypt
-    //     char changedBlock[16]; 
-    //     encrypt_block(key, block, changedBlock);
-
-    //     fwrite(changedBlock, sizeof(changedBlock), 1, outputfile);
+    //     encrypt_block(key, block, 16);
+    //     // block is now encrypted 
+    //     fwrite(block, sizeof(block), 1, outputfile);
     // }
     
     int keyLength = sizeof(key)/sizeof(key[0]);
@@ -92,6 +91,34 @@ void binaryToHex(unsigned char bytes[], int byte_size, char *hex){
     memcpy(hex, temp, bin_len*2);
 }
 
-void encrypt_block(unsigned char key[], unsigned char block[], char *outputblock){
+void encrypt_block(unsigned char key[], unsigned char block[], int blockSize){
+    int rounds = 10;
+
+    unsigned char word1[4],word2[4],word3[4],word4[4];
+    unsigned char *state = block;
     
+    for (int i = 0; i < 4; i++)
+    {
+        word1[i] = block[i];
+        word2[i] = block[i+1];
+        word3[i] = block[i+2];
+        word4[i] = block[i+3];
+    }
+    
+    //Use 0th (given) Roundkey on state
+    //
+    for (int i = 0; i < rounds-1; i++)
+    {
+        subBytes(state);
+        shiftRows(state);
+        mixColumns(state);
+        addRoundKey(state, key); //we updated the Key and apply the key here
+    }
+
+    //last round, no mix-columns
+    subBytes(state);
+    shiftRows(state);
+    addRoundKey(state);
+
+    //FINISHED, state has now changed the original block
 }

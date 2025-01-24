@@ -1,10 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-
-static FILE *inputfile;
-static FILE *outputfile;
+#include <unistd.h>
+#include <time.h>
 
 static const unsigned char sbox[256] = {
   //0     1    2      3     4    5     6     7      8    9     A      B    C     D     E     F
@@ -25,7 +23,7 @@ static const unsigned char sbox[256] = {
   0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
   0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16 };
 
-static const unsigned char Rcon[11] ={0xff, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36};
+static const unsigned char Rcon[11] ={0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36};
 
 //Depends on AES version (128bit = 4, 196bit = 6, 256bit = 8)
 #define Nk 4
@@ -33,12 +31,17 @@ static const unsigned char Rcon[11] ={0xff, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 
 #define Nr 10
 //Is always 4
 #define Nb 4 
-static unsigned char keySchedule[Nb *(Nr + 1)*4];
-int keyCont = 4; //Index to continue from in the keySchedule
+#define maxBytes 1600000
 
-void binaryToHex(unsigned char bytes[], int byte_size, char *hex);
+//I decided to use bytes instead of words so I increased the keySchedule array 4 times since one word is 4 bytes
+// it would hold the same amount of information anyways so not to disturb any "performance"
+static unsigned char keySchedule[Nb *(Nr + 1)*4];
+static unsigned char blocks[maxBytes];
+int keyCont = 0; 
+
+void binaryToHex(unsigned char bytes[], int byte_size);
 void hexToBinary(char *hex, int hexKardinality, unsigned char *bytes);
-void encrypt_block(unsigned char key[], unsigned char block[], int blockSize);
+void encrypt_block(unsigned char block[], int blockSize);
 void shiftRows(unsigned char *block);
 void mixColumns(unsigned char *block);
 void keyExpansion(unsigned char key[], unsigned char keySchedule[]);
@@ -46,69 +49,86 @@ void keyExpansion(unsigned char key[], unsigned char keySchedule[]);
 
 int main(int argc, char const *argv[])
 {
-    if(argc == 1){
-        printf("Error: needs an (1) input file");
-        return 1;
-    }
-
-    inputfile = fopen(argv[1],"rb");    
-    if(inputfile == NULL){
-        printf("Error: could not open file");
-        return 1;
-    }
-
+    // if(argc == 1){
+    //     printf("Error: needs an (1) input file");
+    //     return 1;
+    // }
     unsigned char block[16];
     unsigned char key[16];
-    short keySize = 4*Nk; // key is 16 bytes
-    unsigned char c;
-    int counter = 0;
-
+    
+    printf("START");
+    FILE* inputfile = fopen("aes_sample.in", "r");
     //Read in key
-    while (counter < keySize)
+    int counter = 0;
+    // counter = read(STDIN_FILENO, key, 16);
+    hexToBinary("F4C020A0A1F604FD343FAC6A7E6AE0F9", 32, key);
+
+    // Create KeySchedule from key
+    keyExpansion(key, keySchedule);
+    // printKeyExpansion();
+    
+    //Stream in 16 bytes at a time and encrypt/decrypt each block separatley
+    int totalBytes= 0;
+    short flag = 1;
+    int blocksCounter = 0;
+    int amountWriteBack = 0;
+    counter = 1;
+
+    printf("START");
+    int start = clock();
+    while (1)
     {
-        //c is one byte
-        c = (unsigned char) fgetc(inputfile);
-        // printf("Counter: %d, num: %d\n", counter, c);
-        key[counter++] = c;
+        // while((counter = read(STDIN_FILENO, blocks, maxBytes)) != EOF)
+        while((counter = fread(blocks, sizeof(blocks), 1, inputfile)) != EOF){
+            amountWriteBack = counter;
+            blocksCounter = 0;
+            while (counter > 0)
+            {
+                // Retrive one block from blocks
+                for (size_t i = 0; i < Nk*4; i++)
+                {
+                    block[i] = blocks[blocksCounter++];
+                }
+                
+                // Encrypt block
+                encrypt_block(block, 16);
+                blocksCounter -= 16;
+                for (size_t i = 0; i < Nk*4; i++)
+                {
+                    blocks[blocksCounter++] = block[i];
+                }
+                counter -= 16;
+            }
+            if(amountWriteBack == maxBytes){
+                // Write the entire "blocks" once it is encrypted 
+                write(STDOUT_FILENO, blocks, maxBytes);
+            }
+            else{ 
+                write(STDOUT_FILENO, blocks, amountWriteBack);
+            }
+        }
+        if(counter == -1){
+            break;
+        }
     }
+    int end = clock();
+    printf("It took %.2f second(s) to encrypt 1 000 000 times",(float)((end-start)/CLOCKS_PER_SEC));
     
-    // // Create KeySchedule from key
-    // keyExpansion(key, keySchedule);
-    // unsigned char byte[8] = {0};
-    // for (int i = 0; i < Nb*(Nr+1)*4; i += 16)
+    
+    
+    // hexToBinary("F295B9318B994434D93D98A4E449AFD8", 32, block);
+    // int start = clock();
+    // for (size_t i = 0; i < 1000000; i++)
     // {
-    //     byte[0] = (keySchedule[i] << 4) | (keySchedule[i+1]);
-    //     byte[1] = (keySchedule[i+2] << 4) | (keySchedule[i+3]);
-        
-    //     byte[2] = (keySchedule[i+4] << 4) | (keySchedule[i+5]);
-    //     byte[3] = (keySchedule[i+6] << 4) | (keySchedule[i+7]);
-        
-    //     byte[4] = (keySchedule[i+8] << 4) | (keySchedule[i+9]);
-    //     byte[5] = (keySchedule[i+10] << 4) | (keySchedule[i+11]);
-        
-    //     byte[6] = (keySchedule[i+12] << 4) | (keySchedule[i+13]);
-    //     byte[7] = (keySchedule[i+14] << 4) | (keySchedule[i+15]);
-
-    //     char output[16 + 1];
-    //     binaryToHex(byte, 8, output);
-    //     printf("%d# %s\n",i, output);
+    //     encrypt_block(block, 16);
     // }
+    // int end = clock();
+
     
 
-    // // outputfile = fopen("output.ans", "w");
-    // //Stream in 16 bytes at a time and encrypt/decrypt each block separatley
-    // // while(feof(inputfile) == 0){
-    // //     counter = 0;
-    // //     while(counter < keySize){
-    // //         c = fgetc(inputfile);
-    // //         block[counter++] = c;
-    // //     }
-    // //     // encrypt/decrypt
-    // //     encrypt_block(key, block, 16);
-    // //     // block is now encrypted 
-    //     // fwrite(block, sizeof(block), 1, outputfile);
-    // // }
-    
+
+    // printf("Encrypted block: ");
+    // binaryToHex(block, 16);
     // int keyLength = sizeof(key)/sizeof(key[0]);
     // char keyHex[keyLength*2 + 1];
     // __uint8_t back2Binary[keyLength];
@@ -116,37 +136,16 @@ int main(int argc, char const *argv[])
     // hexToBinary(keyHex, keyLength*2, back2Binary);
     
     // printf("Key in Hex: \n%s\n",keyHex);
-
-   
-
-    fclose(inputfile);
-    // fclose(outputfile);
     
     return 0;
 }
 
-void binaryToHex(unsigned char bytes[], int byte_size, char *hex){
-    char hexabeth[] = "0123456789ABCDEF";
-    unsigned char left, right;
-    int bin_len = byte_size;
-    for (int i = 0; i < bin_len; i++)
+void binaryToHex(unsigned char bytes[], int byte_size){
+    for (int i = 0; i < byte_size; i++)
     {
-        //0b01101010
-        unsigned char c = bytes[i];
-
-        //0b00000110
-        left = c >> 4; 
-        
-        //0b00001010
-        right = c & 0xf;
-
-        // printf("#%d c:%x, left:%x, right:%x\n", i, c, left, right);
-        hex[2*i] = hexabeth[left];
-        hex[2*i+1] = hexabeth[right];
+       printf("%02x", bytes[i]);
     }
-
-    //NULL terminate the string or else
-    hex[bin_len*2] = '\0';
+    puts("");
 }
 
 void hexToBinary(char *hex, int hexKardinality, __uint8_t *bytes){
@@ -188,50 +187,44 @@ Block -->   5  6  7  8   --> 6  7  8  5
             13 14 15 16      16 13 14 15
 */
 void shiftRows(unsigned char *block){
-    // for (size_t i = 1; i <= 16; i++)
-    // {
-    //     printf("%3d ", block[i-1]);
-    //     if (i % 4 == 0)
-    //     {
-    //         printf("\n");
-    //     }
-        
-    // }
     
     unsigned char temp[2];
     //1th row clear
 
+    // 0  1  2  3       0  5  10 15 
+    // 4  5  6  7  -->  4  9  14 3
+    // 8  9  10 11      8  13 2  7
+    // 12 13 14 15      12 1  6  11
+
     //2nd row
-    temp[0] = block[4];
+    temp[0] = block[1];
     size_t i;
-    for (i = 4; i < 7; i++)
-    {
-        block[i] = block[i+1];
-    }
-    block[7] = temp[0];
+    block[1] = block[5];
+    block[5] = block[9];
+    block[9] = block[13];
+    block[13] = temp[0];
 
     // 3rd row
-    temp[0] = block[8];
-    temp[1] = block[9];
-    block[8] = block[10];
-    block[9] = block[11];
+    temp[0] = block[2];
+    temp[1] = block[6];
+    block[2] = block[10];
+    block[6] = block[14];
     block[10] = temp[0];
-    block[11] = temp[1];
+    block[14] = temp[1];
 
     // 4th row
     temp[0] = block[15];
-    for (i = 15; i > 12; i--)
-    {
-        block[i] = block[i-1];
-    }
-    block[12] = temp[0];
+    block[15] = block[11];
+    block[11] = block[7];
+    block[7] = block[3];
+    block[3] = temp[0];
 }
 
 
-//Inspired from Wikipedia, one time check when 
+//Inspired and described by FIPS 197, checks whether  
 //the irreduciable polynomial theorem needs to be used 
 unsigned char xtime(unsigned char byte){
-    return (((byte >> 7) & 1) * 0x1b);
+    return (byte << 1 ^ (((byte >> 7) & 1) * 0x1b));
 }
 
 unsigned char gfMulti(unsigned char byte, int term){
@@ -239,12 +232,12 @@ unsigned char gfMulti(unsigned char byte, int term){
         return byte;
     }
     //check if polynomial is over the limit
-    //adjust with irreduciable polynomial theorem
-    __uint8_t adjust = xtime(byte);
-    __uint8_t shifted = (byte << 1) ^ adjust;
+    //adjust with irreduciable polynomial theorem, as needed
+    __uint8_t copy = byte;
+    __uint8_t shifted = xtime(byte);
     if (term == 3)
     {
-        return shifted ^ byte;
+        return shifted ^ copy;
     }
     return shifted;
 }
@@ -258,35 +251,37 @@ void mixColumns(unsigned char *block){
     
     for (int i = 0; i < Nk; i++)
     {
-        block[i] = (gfMulti(copy_block[i], 0x02) ^ gfMulti(copy_block[i+4], 0x03)) ^ copy_block[i+8]^ copy_block[i+12];
-        block[i+4] = copy_block[i] ^ gfMulti(copy_block[i+4], 0x02) ^ gfMulti(copy_block[i+8], 0x03) ^ copy_block[i+12];
-        block[i+8] = copy_block[i] ^ copy_block[i+4] ^ (gfMulti(copy_block[i+8], 0x02) ^ gfMulti(copy_block[i+12], 0x03));
-        block[i+12] = gfMulti(copy_block[i], 0x03) ^ gfMulti(copy_block[i+12], 0x02) ^ copy_block[i+4] ^ copy_block[i+8];
+        block[4*i]   = gfMulti(copy_block[4*i], 0x02) ^ gfMulti(copy_block[4*i+1], 0x03) ^ copy_block[4*i+2] ^ copy_block[4*i+3];
+        block[4*i+1] = copy_block[4*i] ^ gfMulti(copy_block[4*i+1], 0x02) ^ gfMulti(copy_block[4*i+2], 0x03) ^ copy_block[4*i+3];
+        block[4*i+2] = copy_block[4*i] ^ copy_block[4*i+1] ^ gfMulti(copy_block[4*i+2], 0x02) ^ gfMulti(copy_block[4*i+3], 0x03);
+        block[4*i+3] = gfMulti(copy_block[4*i], 0x03) ^ gfMulti(copy_block[4*i+3], 0x02) ^ copy_block[4*i+1] ^ copy_block[4*i+2];
     }
     
 }
 
-void addRoundKey(unsigned char *block, int blockSize, unsigned char *key){
+void addRoundKey(unsigned char *block, int blockSize){
     unsigned char RoundKey[16];
     
     // Assign key to be i:th Round key
-    for (int i = 0; i < 4*Nk; i++)
+    for (int i = 0; i < Nk; i++)
     {
         //keyCont is a global variable
-        RoundKey[i] = keySchedule[keyCont];
-        RoundKey[i+1] = keySchedule[keyCont+1];
-        RoundKey[i+2] = keySchedule[keyCont+2];
-        RoundKey[i+3] = keySchedule[keyCont+3];
+        RoundKey[4*i] = keySchedule[keyCont];
+        RoundKey[4*i+1] = keySchedule[keyCont+1];
+        RoundKey[4*i+2] = keySchedule[keyCont+2];
+        RoundKey[4*i+3] = keySchedule[keyCont+3];
         keyCont += 4;
     }
 
     //XOR State with i:th Roundkey
+    __uint8_t roundkey_index = 0;
     for (int i = 0; i < 4; i++)
     {
-        block[i] = block[i] ^ RoundKey[i];
-        block[i + 4] = block[i + 4] ^ RoundKey[i + 1];
-        block[i + 8] = block[i + 8] ^ RoundKey[i + 2];
-        block[i + 12] = block[i + 12] ^ RoundKey[i + 3];
+        block[4*i] = block[4*i] ^ RoundKey[roundkey_index];
+        block[4*i+1] = block[4*i+1] ^ RoundKey[roundkey_index+1];
+        block[4*i+2] = block[4*i+2] ^ RoundKey[roundkey_index+2];
+        block[4*i+3] = block[4*i+3] ^ RoundKey[roundkey_index+3];
+        roundkey_index += 4;
     }
 }
 
@@ -302,69 +297,63 @@ void keyExpansion(unsigned char key[], unsigned char keySchedule[]){
     // // "temp" Keeps 4 bytes (word) temporarily
     // // "keySchedule" is an array of bytes (because less headache)
     unsigned char temp[4];
+    int keylenght = 4*Nk;
     int i = 0;
 
-    while (i < Nk)
+    while (i < keylenght)
     {
-        keySchedule[i] = key[4*i];
-        keySchedule[i + 1] = key[4*i + 1];
-        keySchedule[i + 2] = key[4*i + 2];
-        keySchedule[i + 3] = key[4*i + 3]; 
+        keySchedule[i] = key[i];
         i++;
     }
-    
-    i = Nk;
+        
+    i = keylenght;
     while (i < (Nb*(Nr+1))*4)
     {
-        //load previous word, each word will be based on its 4th generation
+        //load previous word
         temp[0] = keySchedule[(i-4)];
         temp[1] = keySchedule[(i-3)];
         temp[2] = keySchedule[(i-2)];
         temp[3] = keySchedule[(i-1)];
-        if(i % Nk == 0){
+
+        if(i % keylenght == 0){
             RotWord(temp);
             subBytes(temp, 4);
-            for (size_t i = 0; i < 4; i++)
-            {
-                temp[i] = temp[i] ^ Rcon[i/Nk];
-            }   
+            temp[0] = temp[0] ^ Rcon[i/keylenght];            
         }
         //Only for 256bit AES
-        else if ((Nk > 6) && (i % Nk == 4)){
+        else if ((keylenght > 20) && (i % keylenght == 16)){
             subBytes(temp, 4);
         }
-        keySchedule[i] = keySchedule[i-Nk] ^ temp[0];
-        keySchedule[i+1] = keySchedule[i+1-Nk] ^ temp[1];
-        keySchedule[i+2] = keySchedule[i+2-Nk] ^ temp[2];
-        keySchedule[i+3] = keySchedule[i+3-Nk] ^ temp[3];
+        //create new word from start and end of previous key
+        keySchedule[i]   = keySchedule[i-keylenght]   ^ temp[0];
+        keySchedule[i+1] = keySchedule[i+1-keylenght] ^ temp[1];
+        keySchedule[i+2] = keySchedule[i+2-keylenght] ^ temp[2];
+        keySchedule[i+3] = keySchedule[i+3-keylenght] ^ temp[3];
         // printf("tempe = %x %x %x %x\n", keySchedule[i], keySchedule[i+1], keySchedule[i+2], keySchedule[i+3]);
         i += 4;
     }
 }
 
-void encrypt_block(unsigned char key[], unsigned char block[], int blockSize){
-    int rounds = 10;
+void encrypt_block(unsigned char block[], int blockSize){
     unsigned char *state = block;
-
-    //Use 0th Roundkey (given) on state
-    for (int i = 0; i < blockSize; i++)
-    {
-        state[i] = state[i] ^ key[i];
-    }
+    keyCont = 0; //must be reset or else
     
-    //Start the rounds
+    //Use 0th Roundkey (given) on state
+    addRoundKey(state, blockSize); 
+    
+    //Start the rounds-1
     for (int i = 0; i < Nr-1; i++)
     {
         subBytes(state, blockSize);
         shiftRows(state);
         mixColumns(state);
-        addRoundKey(state, blockSize, key); //we updated the Key and apply the key here
+        addRoundKey(state, blockSize); //we updated the Key and apply the key here
     }
 
     //last round, no mix-columns
     subBytes(state, blockSize);
     shiftRows(state);
-    addRoundKey(state, blockSize, key);
+    addRoundKey(state, blockSize);
 
     //FINISHED, state has now changed the original block
 }
@@ -391,5 +380,30 @@ void testMixColumns(){
         }
         printf("%x ", bytes[i]);
         
+    }
+}
+
+void printKeyExpansion(){
+    __uint8_t byte[16];
+    for (int i = 0; i < Nb*(Nr+1)*4; i += 16)
+    {
+        byte[0] = keySchedule[i];
+        byte[1] = keySchedule[i+1];
+        byte[2] = keySchedule[i+2];
+        byte[3] = keySchedule[i+3];
+        byte[4] = keySchedule[i+4];
+        byte[5] = keySchedule[i+5];
+        byte[6] = keySchedule[i+6];
+        byte[7] = keySchedule[i+7];
+        byte[8] = keySchedule[i+8];
+        byte[9] = keySchedule[i+9];
+        byte[10] = keySchedule[i+10];
+        byte[11] = keySchedule[i+11];
+        byte[12] = keySchedule[i+12];
+        byte[13] = keySchedule[i+13];
+        byte[14] = keySchedule[i+14];
+        byte[15] = keySchedule[i+15];
+        printf("#%d ", i);
+        binaryToHex(byte, 16);
     }
 }

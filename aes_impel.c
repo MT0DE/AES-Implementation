@@ -136,12 +136,6 @@ void subBytes(unsigned char *block, int blockSize){
     }
 }
 
-/* 
-            1  2  3  4       1  2  3  4
-Block -->   5  6  7  8   --> 6  7  8  5
-            9  10 11 12      11 12 9  10
-            13 14 15 16      16 13 14 15
-*/
 void shiftRows(unsigned char *block){
     
     unsigned char temp[2];
@@ -154,7 +148,6 @@ void shiftRows(unsigned char *block){
 
     //2nd row
     temp[0] = block[1];
-    size_t i;
     block[1] = block[5];
     block[5] = block[9];
     block[9] = block[13];
@@ -178,7 +171,8 @@ void shiftRows(unsigned char *block){
 
 
 //Inspired and described by FIPS 197, checks whether  
-//the irreduciable polynomial theorem needs to be used 
+//the irreduciable polynomial theorem needs to be used
+//and returns the correct multiplication in GF 
 unsigned char xtime(unsigned char byte){
     return (byte << 1 ^ (((byte >> 7) & 1) * 0x1b));
 }
